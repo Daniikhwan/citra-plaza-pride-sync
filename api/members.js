@@ -4,11 +4,15 @@
 // environment (set when the Blob store was connected to the project).
 // No phone numbers are ever stored or accepted here — shared fields are
 // name, role, vehicle, status.
-// Writes need the shared SYNC_KEY (light friction only — the key is visible
-// in the public app's source, so it is NOT real security).
+//
+// NOTE on writes: this endpoint deliberately has NO write key. A static
+// page cannot keep a secret — anything shipped in the page source is
+// public — so a shared key would be theatre, not security. The list is
+// community-editable by design (like a shared doc). Safety net instead:
+// every write first backs up the current list to members-prev.json, so a
+// bad overwrite can be restored (GET /api/members?prev=1).
 const { put, list } = require('@vercel/blob');
 
-const SYNC_KEY = process.env.SYNC_KEY || '';
 const MAX_MEMBERS = 100;
 const ROLES = ['Admin grup', 'Anggota'];
 const STATUSES = ['On Bid', 'Istirahat', 'Off'];
@@ -19,8 +23,8 @@ function cors(res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 }
 
-async function blobGet() {
-  const { blobs } = await list({ prefix: 'members.json' });
+async function blobGet(prefix) {
+  const { blobs } = await list({ prefix });
   if (!blobs.length) return null;
   const newest = blobs.sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt))[0];
   // Cache-buster so the CDN never serves a stale list after a write.
@@ -30,8 +34,8 @@ async function blobGet() {
   return r.text();
 }
 
-async function blobPut(value) {
-  await put('members.json', value, {
+async function blobPut(pathname, value) {
+  await put(pathname, value, {
     access: 'public',
     addRandomSuffix: false,
     allowOverwrite: true,
@@ -59,21 +63,23 @@ module.exports = async (req, res) => {
 
   try {
     if (req.method === 'GET') {
-      const raw = await blobGet();
+      const raw = await blobGet(req.query && req.query.prev ? 'members-prev.json' : 'members.json');
       const members = raw ? JSON.parse(raw) : [];
       return res.status(200).json({ members, updatedAt: Date.now() });
     }
 
     if (req.method === 'POST') {
       const body = req.body || {};
-      if (!SYNC_KEY || body.key !== SYNC_KEY) {
-        return res.status(401).json({ error: 'bad_key' });
-      }
       if (!Array.isArray(body.members) || body.members.length > MAX_MEMBERS) {
         return res.status(400).json({ error: 'bad_members' });
       }
       const members = body.members.map(cleanMember).filter(Boolean);
-      await blobPut(JSON.stringify(members));
+      // Back up the current list before overwriting it.
+      const current = await blobGet('members.json');
+      if (current) {
+        await blobPut('members-prev.json', current);
+      }
+      await blobPut('members.json', JSON.stringify(members));
       return res.status(200).json({ ok: true, count: members.length });
     }
 
