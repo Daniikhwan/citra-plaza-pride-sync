@@ -7,9 +7,13 @@ langsung kelihatan di HP lain.
 ## Cara kerja
 
 - `GET /api/members` → `{ members, updatedAt }` (publik, tanpa key).
-- `POST /api/members` dengan body `{ key, members }` → ganti seluruh daftar.
-  Key = isi `sync-key.txt` (env var `SYNC_KEY` di Vercel). Key ini kelihatan
-  di source aplikasi publik, jadi cuma penghalang iseng — BUKAN keamanan.
+- `POST /api/members` dengan body `{ members }` → ganti seluruh daftar.
+  TANPA kunci tulis — halaman statis tidak bisa menyimpan rahasia (apa pun
+  di source halaman itu publik), jadi kunci bersama cuma sandiwara, bukan
+  keamanan. Daftar ini memang bisa diedit siapa pun yang punya link,
+  seperti dokumen bersama. Pengaman: tiap tulis dulu membackup daftar
+  lama ke `members-prev.json` (baca via `GET /api/members?prev=1`), jadi
+  timpaan yang salah bisa dibalikkan.
 - Penyimpanan: Vercel Blob (satu file JSON publik, `members.json`) via SDK
   resmi `@vercel/blob` — env var `BLOB_READ_WRITE_TOKEN` (otomatis terisi
   saat Blob store di-link ke project; koneksi harus mode token, bukan OIDC
@@ -37,6 +41,11 @@ Vercel CLI (`/usr/bin/vercel`, login sebagai daniikhwan):
    (token dari `vercel env pull`; atau pakai SDK `@vercel/blob` dengan
    `addRandomSuffix: false` supaya URL-nya stabil).
 5. Set env var `SYNC_KEY` = isi `sync-key.txt` (production + preview).
+   [DICABUT 17 Nov 2026 20:47 WIB: kunci tulis tidak bisa disembunyikan di
+   halaman statis — audit keamanan artifact menolak kunci di kode klien —
+   jadi syarat kunci dihapus dari server dan env var SYNC_KEY dihapus dari
+   project. Daftar kini bisa diedit siapa pun yang punya link; backup
+   otomatis (members-prev.json) jadi pengaman timpaan salah.]
 6. Redeploy supaya env var berlaku, lalu cek `GET https://<host>/api/health`
    → `{ ok: true }` dan `GET /api/members` → 3 admin awal.
 7. Catat URL `https://<host>/api/members` + key — dipakai saat update
