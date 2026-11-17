@@ -1,12 +1,14 @@
 // Citra Plaza Pride — shared member list sync (Vercel serverless function).
-// Storage: Vercel KV (Upstash) via its REST API. No phone numbers are ever
-// stored or accepted here — shared fields are name, role, vehicle, status.
+// Storage: Vercel Blob (one small public JSON file, members.json) via the
+// official @vercel/blob SDK. The SDK reads BLOB_READ_WRITE_TOKEN from the
+// environment (set when the Blob store was connected to the project).
+// No phone numbers are ever stored or accepted here — shared fields are
+// name, role, vehicle, status.
 // Writes need the shared SYNC_KEY (light friction only — the key is visible
 // in the public app's source, so it is NOT real security).
-const KV_URL = process.env.KV_REST_API_URL;
-const KV_TOKEN = process.env.KV_REST_API_TOKEN;
+const { put, list } = require('@vercel/blob');
+
 const SYNC_KEY = process.env.SYNC_KEY || '';
-const KEY = 'cpp:members';
 const MAX_MEMBERS = 100;
 const ROLES = ['Admin grup', 'Anggota'];
 const STATUSES = ['On Bid', 'Istirahat', 'Off'];
@@ -17,24 +19,24 @@ function cors(res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 }
 
-function kvHeaders() {
-  return { Authorization: `Bearer ${KV_TOKEN}` };
+async function blobGet() {
+  const { blobs } = await list({ prefix: 'members.json' });
+  if (!blobs.length) return null;
+  const newest = blobs.sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt))[0];
+  // Cache-buster so the CDN never serves a stale list after a write.
+  const r = await fetch(`${newest.url}?t=${Date.now()}`);
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error(`blob get failed: ${r.status}`);
+  return r.text();
 }
 
-async function kvGet() {
-  const r = await fetch(`${KV_URL}/get/${KEY}`, { headers: kvHeaders() });
-  if (!r.ok) throw new Error(`kv get failed: ${r.status}`);
-  const j = await r.json();
-  return j.result || null;
-}
-
-async function kvSet(value) {
-  const r = await fetch(
-    `${KV_URL}/set/${KEY}/${encodeURIComponent(value)}`,
-    { headers: kvHeaders() }
-  );
-  if (!r.ok) throw new Error(`kv set failed: ${r.status}`);
-  return r.json();
+async function blobPut(value) {
+  await put('members.json', value, {
+    access: 'public',
+    addRandomSuffix: false,
+    allowOverwrite: true,
+    contentType: 'application/json',
+  });
 }
 
 function cleanMember(m) {
@@ -51,13 +53,13 @@ function cleanMember(m) {
 module.exports = async (req, res) => {
   cors(res);
   if (req.method === 'OPTIONS') return res.status(204).end();
-  if (!KV_URL || !KV_TOKEN) {
+  if (!process.env.BLOB_READ_WRITE_TOKEN) {
     return res.status(503).json({ error: 'store_not_configured' });
   }
 
   try {
     if (req.method === 'GET') {
-      const raw = await kvGet();
+      const raw = await blobGet();
       const members = raw ? JSON.parse(raw) : [];
       return res.status(200).json({ members, updatedAt: Date.now() });
     }
@@ -71,12 +73,13 @@ module.exports = async (req, res) => {
         return res.status(400).json({ error: 'bad_members' });
       }
       const members = body.members.map(cleanMember).filter(Boolean);
-      await kvSet(JSON.stringify(members));
+      await blobPut(JSON.stringify(members));
       return res.status(200).json({ ok: true, count: members.length });
     }
 
     return res.status(405).json({ error: 'method_not_allowed' });
   } catch (e) {
+    console.error('members error:', e);
     return res.status(500).json({ error: 'server_error' });
   }
 };
